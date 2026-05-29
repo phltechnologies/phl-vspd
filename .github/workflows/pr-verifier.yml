@@ -1,4 +1,4 @@
-name: PHI — PR Verifier
+name: PHL — PR Verifier
 
 on:
   pull_request:
@@ -76,13 +76,13 @@ jobs:
             echo "✅ No blocked paths touched"
           fi
 
-      - name: Verify PR is from phi/ branch
+      - name: Verify PR is from phl/ branch
         run: |
           BRANCH="${{ github.head_ref }}"
-          if [[ "$BRANCH" == phi/* ]]; then
-            echo "✅ Branch follows phi/ naming convention: $BRANCH"
+          if [[ "$BRANCH" == phl/* ]]; then
+            echo "✅ Branch follows phl/ naming convention: $BRANCH"
           else
-            echo "::warning::Branch '$BRANCH' does not follow phi/* convention"
+            echo "::warning::Branch '$BRANCH' does not follow phl/* convention"
           fi
 
       - name: Post verification summary
@@ -96,5 +96,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## ${icon} PHI CI Verifier: ${outcome.toUpperCase()}\n\nAll automated checks have run. A PHI maintainer must approve this PR before it can be merged.\n\n_PHI Technologies automated pipeline_`
+              body: `## ${icon} PHL CI Verifier: ${outcome.toUpperCase()}\n\nAll automated checks have run. A PHL maintainer must approve this PR before it can be merged.\n\n_PHL Technologies automated pipeline_`
             });
