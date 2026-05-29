@@ -1,0 +1,72 @@
+name: PHI — Upstream Sync Check
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2am UTC nightly
+  workflow_dispatch:        # manual trigger
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout PHI fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          UPSTREAM=$(echo "${{ github.repository }}" | sed 's/phltechnologies\/phi-/decred\//')
+          git remote add upstream https://github.com/$UPSTREAM.git || true
+          git fetch upstream
+
+      - name: Check commit lag
+        id: lag
+        run: |
+          BEHIND=$(git rev-list HEAD..upstream/master --count 2>/dev/null || echo "0")
+          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
+          echo "PHI fork is $BEHIND commits behind upstream"
+
+      - name: Cherry-pick SYNC commits
+        if: steps.lag.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          BEHIND=${{ steps.lag.outputs.behind }}
+          echo "Attempting to sync $BEHIND commits from upstream..."
+
+          # Get list of commits to sync (max 5 at a time for safety)
+          COMMITS=$(git log HEAD..upstream/master --oneline --max-count=5 --reverse)
+          echo "Commits to consider:"
+          echo "$COMMITS"
+
+          # Only auto-apply commits that look like safe SYNC candidates
+          git log HEAD..upstream/master --format="%H %s" --max-count=5 --reverse | while read SHA MSG; do
+            # Check if commit message matches safe patterns
+            if echo "$MSG" | grep -qiE "^(docs?|readme|chore|test|ci|bump|update dep|lint|fmt|typo|spelling)"; then
+              echo "Auto-syncing: $SHA — $MSG"
+              git cherry-pick --no-commit "$SHA" || git cherry-pick --abort
+            else
+              echo "Skipping (needs review): $SHA — $MSG"
+            fi
+          done
+
+      - name: Run tests after sync attempt
+        run: |
+          if [ -f "go.mod" ]; then
+            go test ./... 2>&1 | tail -20 || true
+          elif [ -f "package.json" ]; then
+            npm ci --quiet && npm test 2>&1 | tail -20 || true
+          fi
+
+      - name: Report lag status
+        run: |
+          BEHIND=${{ steps.lag.outputs.behind }}
+          if [ "$BEHIND" -gt "50" ]; then
+            echo "::warning::PHI fork is $BEHIND commits behind upstream — manual sync recommended"
+          fi
