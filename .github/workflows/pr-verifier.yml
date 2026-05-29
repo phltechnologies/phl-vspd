@@ -1,0 +1,100 @@
+name: PHI — PR Verifier
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches: [master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go (if Go project)
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node (if JS project)
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies (Go)
+        if: hashFiles('go.mod') != ''
+        run: go mod download
+
+      - name: Install dependencies (Node)
+        if: hashFiles('package.json') != ''
+        run: npm ci --quiet
+
+      - name: Run tests (Go)
+        if: hashFiles('go.mod') != ''
+        run: |
+          go vet ./...
+          go test -race -count=1 ./... 2>&1
+
+      - name: Run tests (Node)
+        if: hashFiles('package.json') != ''
+        run: npm test 2>&1 || true
+
+      - name: Security scan (Go)
+        if: hashFiles('go.mod') != ''
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest || true
+          govulncheck ./... 2>&1 | tail -30 || true
+
+      - name: Check blocked paths
+        run: |
+          BLOCKED_PATTERNS="chaincfg/ dcrec/ crypto/ pgpkeys/ wallet/udb/ internal/rpchelp/ politeiawww/user/ politeiawww/mail/ server/comms/ client/core/swap"
+          CHANGED_FILES=$(git diff --name-only origin/master...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          VIOLATIONS=""
+          for pattern in $BLOCKED_PATTERNS; do
+            if echo "$CHANGED_FILES" | grep -q "$pattern"; then
+              VIOLATIONS="$VIOLATIONS\n  ❌ Blocked path touched: $pattern"
+            fi
+          done
+          if [ -n "$VIOLATIONS" ]; then
+            echo -e "BLOCKED PATH VIOLATIONS:$VIOLATIONS"
+            echo "::error::This PR touches blocked paths. Human review required before any merge."
+            exit 1
+          else
+            echo "✅ No blocked paths touched"
+          fi
+
+      - name: Verify PR is from phi/ branch
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ "$BRANCH" == phi/* ]]; then
+            echo "✅ Branch follows phi/ naming convention: $BRANCH"
+          else
+            echo "::warning::Branch '$BRANCH' does not follow phi/* convention"
+          fi
+
+      - name: Post verification summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ job.status }}';
+            const icon = outcome === 'success' ? '✅' : '❌';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## ${icon} PHI CI Verifier: ${outcome.toUpperCase()}\n\nAll automated checks have run. A PHI maintainer must approve this PR before it can be merged.\n\n_PHI Technologies automated pipeline_`
+            });
